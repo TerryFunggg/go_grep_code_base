@@ -8,15 +8,32 @@ import (
 	"os"
 )
 
+func PrintHelp() {
+    help := `
+  grep_code_base [-h|-t language] keyword
+    -h: Help Menu
+    
+    -t|-type language: target language
+    `
+    fmt.Print(help)
+}
+
 
 func main () {
     var typeCommand string
     var searchKeyWord string
-    for i, args := range os.Args {
+    if len(os.Args) <= 1 {
+        PrintHelp()
+        os.Exit(0)
+    }
+    for i, args := range os.Args { 
         if args == "server" {
             server.Start()
         }else if args == "sync" {
             server.Sync()
+           
+        }else if args == "-h" {
+            PrintHelp()
            
         } else if args == "-t" || args == "-type" {
             if i + 2 > len(os.Args) - 1 {
