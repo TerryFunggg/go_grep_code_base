@@ -2,4 +2,4 @@
 
 ---
 
-![screen](design.png)
+![design](design.png)
