@@ -6,6 +6,11 @@ import (
 	"net/rpc"
 )
 
+const (
+	host = "0.0.0.0"
+	port = ":1234"
+)
+
 type RequestCommand struct {
 	Command  string
 	Search   string
@@ -14,7 +19,7 @@ type RequestCommand struct {
 }
 
 func CallAsCommand(request RequestCommand) *[]grep.Result {
-	client, err := rpc.DialHTTP("tcp", "0.0.0.0"+":1234")
+	client, err := rpc.DialHTTP("tcp", host+port)
 
 	if err != nil {
 		log.Fatalln(err.Error())

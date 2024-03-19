@@ -21,6 +21,7 @@ import (
 
 const (
 	mainDir      = "code"
+	host         = "0.0.0.0"
 	port         = ":1234"
 	numOfWorkers = 20 // the workers are for scan file content.
 )
@@ -230,7 +231,7 @@ func Start() {
 
 	rpc.Register(server)
 	rpc.HandleHTTP()
-	l, err := net.Listen("tcp", "0.0.0.0:1234")
+	l, err := net.Listen("tcp", host+port)
 	if err != nil {
 		log.Fatal("Listen error: ", err)
 	}
