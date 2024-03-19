@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"grep_code_base/database"
 	db "grep_code_base/database"
@@ -12,223 +13,227 @@ import (
 	"net/rpc"
 	"os"
 	"path/filepath"
+	_ "runtime"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	mainDir = "code"
-    port = ":1234"
+	mainDir      = "code"
+	port         = ":1234"
+	numOfWorkers = 20 // the workers are for scan file content.
 )
 
 type RPCServer int64
 
 type RequestCommand struct {
-    Command  string
-    Search   string
-    LangType string
-    IsDebug  bool
+	Command  string
+	Search   string
+	LangType string
+	IsDebug  bool
 }
 
 func (server *RPCServer) GrepCode(args *RequestCommand, reply *[]grep.Result) error {
-    var start time.Time
-    if args.IsDebug {
-        start = time.Now()
-    }
-    *reply = Grep(args.LangType, args.Search)
+	var err error
+	var start time.Time
+	//var m runtime.MemStats
+	if args.IsDebug {
+		start = time.Now()
+	}
+	*reply, err = Grep(args.LangType, args.Search)
+	if err != nil {
+		return err
+	}
 
-    if args.IsDebug {
-        log.Println(time.Since(start))
-    }
-    return nil
+	if args.IsDebug {
+		log.Println(time.Since(start))
+		// runtime.ReadMemStats(&m)
+		// fmt.Printf("Alloc = %v MiB", m.Alloc/1024/1024)
+		// fmt.Printf("\tTotalAlloc = %v MiB", m.TotalAlloc/1024/1024)
+		// fmt.Printf("\tSys = %v MiB", m.Sys/1024/1024)
+		// fmt.Printf("\tNumGC = %v\n", m.NumGC)
+
+	}
+	return nil
 }
 
 func insertToDirList(slice []string, name string) []string {
-    existed := false
+	existed := false
 
-    for _, path := range slice {
-        if name == path {
-            existed = true
-            break
-        }
-    }
+	for _, path := range slice {
+		if name == path {
+			existed = true
+			break
+		}
+	}
 
-    if !existed {
-        slice = append(slice, name)
-    }
+	if !existed {
+		slice = append(slice, name)
+	}
 
-    return slice
+	return slice
 }
 
 func Sync() {
-    var codebaseDir string
-    var codebaseDirStrLength int = 0
-    var codeBases []db.CodeBaseFolder
-    var dirList []string
+	var codebaseDir string
+	var codebaseDirStrLength int = 0
+	var codeBases []db.CodeBaseFolder
+	var dirList []string
 
 	usrDir, err := os.UserHomeDir()
 	if err != nil {
 		panic(err.Error())
 	}
 
-    codebaseDir = fmt.Sprintf("%s/%s", usrDir, mainDir)
-    codebaseDirStrLength = len(codebaseDir)
+	codebaseDir = fmt.Sprintf("%s/%s", usrDir, mainDir)
+	codebaseDirStrLength = len(codebaseDir)
 
+	err = filepath.WalkDir(codebaseDir, func(path string, info fs.DirEntry, err error) error {
 
-    err = filepath.WalkDir(codebaseDir, func(path string, info fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() && !grep.IsIgnoreDir(info.Name()) {
+			if codebaseDirStrLength < len(path) {
 
-        if err != nil {
-            return err
-        }
-        if info.IsDir() && !grep.IsIgnoreDir(info.Name()) {
-            if codebaseDirStrLength < len(path) {
+				pp := path[codebaseDirStrLength+1:]
+				count := strings.Count(pp, string(os.PathSeparator))
 
-                pp := path[codebaseDirStrLength + 1:]
-                count := strings.Count(pp, string(os.PathSeparator))
+				if count == 0 {
+					// language Type
+				}
 
-                if count == 0 {
-                    // language
-                }
+				// Domain
+				if count == 1 {
+					ss := strings.Split(pp, string(os.PathSeparator))
+					inner_path := filepath.Join(ss[0], ss[1])
+					dirList = insertToDirList(dirList, inner_path)
+				}
+				// subdomain or more depth folder
+				if count > 1 {
+					ss := strings.Split(pp, string(os.PathSeparator))
+					inner_path := filepath.Join(ss[0], ss[1], ss[2])
+					dirList = insertToDirList(dirList, inner_path)
+				}
+			}
+		}
 
-                if count == 1 {
-                    ss := strings.Split(pp, string(os.PathSeparator))
-                    inner_path := filepath.Join(ss[0], ss[1])
-                    dirList = insertToDirList(dirList, inner_path)
-                }
+		return nil
+	})
 
-                if count > 1 {
-                    ss := strings.Split(pp, string(os.PathSeparator))
-                    inner_path := filepath.Join(ss[0], ss[1], ss[2])
-                    dirList = insertToDirList(dirList, inner_path)
-                }
-            }
-        }
+	if err != nil {
+		panic(err.Error())
+	}
 
-        return nil
-    })
+	if len(dirList) > 0 {
+		fmt.Println("Sync codebase to db...")
+	} else {
+		fmt.Println("No code folder need to sync..")
+		os.Exit(0)
+	}
 
-    if err != nil {
-        panic(err.Error())
-    }
+	for _, dirs := range dirList {
+		var cb = &db.CodeBaseFolder{}
+		ss := strings.Split(dirs, string(os.PathSeparator))
+		// The Path on include Domain
+		if len(ss) == 2 {
+			cb = &db.CodeBaseFolder{}
+			cb.Lang = ss[0]
+			cb.Domain = ss[1]
+			cb.Path = filepath.Join(ss[0], ss[1])
+			codeBases = append(codeBases, *cb)
+		}
+		// The Path include domain, subdomain
+		if len(ss) == 3 {
+			cb.Lang = ss[0]
+			cb.Domain = ss[1]
+			cb.Subdomain = ss[2]
+			cb.Path = filepath.Join(ss[0], ss[1], ss[2])
+			codeBases = append(codeBases, *cb)
+		}
 
-    if len(dirList) > 0 {
-        fmt.Println("Sync codebase to db...")
-    } else {
-        fmt.Println("No code folder need to sync..")
-        os.Exit(0)
-    }
+	}
 
-    for _, dirs := range dirList {
-        var cb = &db.CodeBaseFolder{}
-        ss := strings.Split(dirs, string(os.PathSeparator))
+	for _, v := range codeBases {
+		db.InsertCodeBaseFolder(v)
+	}
 
-        if len(ss) == 2 {
-            cb = &db.CodeBaseFolder{}
-            cb.Lang = ss[0]
-            cb.Domain = ss[1]
-            cb.Path = filepath.Join(ss[0], ss[1])
-            codeBases = append(codeBases, *cb)
-        }
-
-        if len(ss) == 3 {
-            cb.Lang = ss[0]
-            cb.Domain = ss[1]
-            cb.Subdomain = ss[2]
-            cb.Path = filepath.Join(ss[0], ss[1], ss[2])
-            codeBases = append(codeBases, *cb)
-        }
-
-    }
-
-    for _, v := range codeBases {
-        db.InsertCodeBaseFolder(v)
-    }
-
-
-    fmt.Println("Sync codebase finish!")
+	fmt.Println("Sync codebase finish!")
 }
 
-func PrintHelpMenu() {
+func scanFile(workersWg *sync.WaitGroup, entryList *grep.EntryList, results *[]grep.Result, searchText string) {
+	defer workersWg.Done()
+	for {
+		entry := entryList.Next()
 
-    help := `
-  grep_code_base -t|-type language
+		if entry.Path == "" {
+			return
+		}
 
-    -t|-type language:
-        Grep code seatch by specific language.
-    `
-
-    fmt.Println(help)
+		result := grep.ScanText(entry.Path, searchText)
+		if result != nil {
+			*results = append(*results, *result)
+		}
+	}
 }
 
-func Grep(typeCommand string, searchText string) []grep.Result {
+func Grep(typeCommand string, searchText string) ([]grep.Result, error) {
 
-    dbResults := database.GetCodeBaseFoldersByLangDistinctDomain(typeCommand)
+	dbResults := database.GetCodeBaseFoldersByLangDistinctDomain(typeCommand)
 
-    if len(dbResults) == 0 {
-        log.Printf("No target language %s in code base found.\n", typeCommand)
-        os.Exit(0)
-    }
+	if len(dbResults) == 0 {
+		err := errors.New(fmt.Sprintf("No target language %s in code base found.\n", typeCommand))
+		return nil, err
+	}
 
 	usrDir, err := os.UserHomeDir()
 	if err != nil {
 		panic(err.Error())
 	}
 
-    var workersWg sync.WaitGroup
-    numOfWorkers := 10
+	var workersWg sync.WaitGroup
 
-    entryList := grep.NewEntryList(100)
-    workersWg.Add(1)
-    go func() {
-        defer workersWg.Done()
+	entryList := grep.NewEntryList(len(dbResults))
 
-        for _, dbResult := range dbResults {
-            grep.GetAllFiles(&entryList, filepath.Join(usrDir, mainDir,  dbResult.Path))
-        }
-        entryList.Finish(numOfWorkers)
-    }()
+	workersWg.Add(1)
+	// create a goruntinue for pipe all registered paths into channel
+	go func() {
+		defer workersWg.Done()
 
-    var results []grep.Result
+		for _, dbResult := range dbResults {
+			grep.GetAllFiles(&entryList, filepath.Join(usrDir, mainDir, dbResult.Path))
+		}
+		entryList.Finish(numOfWorkers)
+	}()
 
-    for i := 0; i < numOfWorkers; i++ {
-        workersWg.Add(1)
-        go func()  {
-            defer workersWg.Done()
-            for {
-                entry := entryList.Next()
-                if entry.Path != "" {
-                    result := grep.ScanText(entry.Path, searchText)
-                    if result != nil {
-                        results = append(results, *result)
-                    }
-                } else {
-                    return
-                }
-            }
-        }()
-    }
+	results := new([]grep.Result)
 
-    workersWg.Wait()
+	// another goruntinue to create workers
+	for i := 0; i < numOfWorkers; i++ {
+		workersWg.Add(1)
+		go scanFile(&workersWg, &entryList, results, searchText)
+	}
 
-    // Max result
-    if len(results) >= 51 {
-        results = results[:51]
-    }
+	workersWg.Wait()
 
-    return results
+	// Max result
+	if len(*results) >= 51 {
+		*results = (*results)[:51]
+	}
+
+	return *results, nil
 }
 
+func Start() {
+	server := new(RPCServer)
 
-func Start () {
-    server := new(RPCServer)
+	rpc.Register(server)
+	rpc.HandleHTTP()
+	l, err := net.Listen("tcp", "0.0.0.0:1234")
+	if err != nil {
+		log.Fatal("Listen error: ", err)
+	}
 
-    rpc.Register(server)
-    rpc.HandleHTTP()
-    l,err := net.Listen("tcp", "0.0.0.0:1234")
-    if err != nil {
-        log.Fatal("Listen error: ",err)
-    }
-
-    http.Serve(l, nil)
+	http.Serve(l, nil)
 }

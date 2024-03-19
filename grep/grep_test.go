@@ -1,15 +1,14 @@
 package grep
 
 import (
-    "testing"
+	"testing"
 )
 
-
 func TestGetFilePath(t *testing.T) {
-    targetPath := "~/code"
-    path := GetFilePath(targetPath)
+	targetPath := "~/code"
+	path := GetFilePath(targetPath)
 
-    if path != targetPath {
-        t.Fatalf(`GetFilePath("%q") want match for %q`, path, targetPath)
-    }
+	if path != targetPath {
+		t.Fatalf(`GetFilePath("%q") want match for %q`, path, targetPath)
+	}
 }
